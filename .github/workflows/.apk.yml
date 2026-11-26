@@ -16,7 +16,7 @@ jobs:
 
       - name: Unpack project
         run: |
-          [ -f worklog-app.zip ] || cp worklog-app.dat worklog-app.zip
+          cp "$(ls *.dat | head -1)" worklog-app.zip
           unzip -q worklog-app.zip
           ls worklog-app
 
