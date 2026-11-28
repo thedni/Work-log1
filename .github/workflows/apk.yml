@@ -16,9 +16,8 @@ jobs:
 
       - name: Unpack project
         run: |
-          echo "Files in repo:"; find . -maxdepth 3 -type f -not -path './.git/*' | head -50
           FOUND=""
-          for f in $(find . -maxdepth 3 -type f -not -path './.git/*' -printf '%T@ %p\n' | sort -rn | cut -d' ' -f2-); do
+          for f in $(find . -maxdepth 3 -type f -not -path './.git/*' -not -path './.github/*' -printf '%T@ %p\n' | sort -rn | cut -d' ' -f2-); do
             if unzip -tq "$f" > /dev/null 2>&1; then FOUND="$f"; break; fi
           done
           if [ -z "$FOUND" ]; then echo "No zip-like file found in repo"; exit 1; fi
@@ -26,6 +25,22 @@ jobs:
           cp "$FOUND" worklog-app.zip
           unzip -q worklog-app.zip
           ls worklog-app
+
+      - name: Load private signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          for n in KEYSTORE_BASE64 KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
+            if [ -z "${!n}" ]; then echo "::error::Secret $n is missing (Settings > Secrets and variables > Actions)"; exit 1; fi
+          done
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/signing.jks"
+          echo "KEYSTORE_FILE=$RUNNER_TEMP/signing.jks" >> $GITHUB_ENV
+          echo "KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> $GITHUB_ENV
+          echo "KEY_ALIAS=$KEY_ALIAS" >> $GITHUB_ENV
+          echo "KEY_PASSWORD=$KEY_PASSWORD" >> $GITHUB_ENV
 
       - uses: actions/setup-java@v4
         with:
@@ -41,15 +56,19 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Build debug APK
+      - name: Build signed release APK
         working-directory: worklog-app
-        run: gradle assembleDebug --no-daemon
+        run: gradle assembleRelease --no-daemon
 
-      - name: Rename APK
+      - name: Rename and verify APK
         run: |
           VER=$(grep -oP "versionName '\K[^']+" worklog-app/app/build.gradle)
-          cp worklog-app/app/build/outputs/apk/debug/app-debug.apk "TimesWork-v${VER}.apk"
+          cp worklog-app/app/build/outputs/apk/release/app-release.apk "TimesWork-v${VER}.apk"
+          "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --verbose --print-certs "TimesWork-v${VER}.apk"
+          sha256sum "TimesWork-v${VER}.apk" > "TimesWork-v${VER}.apk.sha256"
+          cat "TimesWork-v${VER}.apk.sha256"
           echo "VER=${VER}" >> $GITHUB_ENV
+          rm -f "$RUNNER_TEMP/signing.jks"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -61,4 +80,6 @@ jobs:
         with:
           tag_name: v${{ env.VER }}
           name: Times Work v${{ env.VER }}
-          files: TimesWork-v*.apk
+          files: |
+            TimesWork-v*.apk
+            TimesWork-v*.apk.sha256
